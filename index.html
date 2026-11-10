@@ -29,6 +29,7 @@ button.tiny{font-size:12px;padding:6px 9px}
 .hidden{display:none!important}
 .receipt{display:grid;grid-template-columns:110px 1fr;gap:14px;border:1px solid #e3e9f0;border-radius:12px;padding:12px;margin-top:12px;background:#f9fbfd}
 .thumb{width:110px;height:140px;border-radius:8px;background:#e8edf3 center/cover no-repeat;border:1px solid #d6dee8;cursor:zoom-in}
+.receipt>div,.fields>div,.fields input,.fields select{min-width:0}
 .fields{display:grid;grid-template-columns:2fr 1.2fr 1fr 1.2fr;gap:10px}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .pill{display:inline-block;background:#e8f2ff;color:#215a91;border-radius:30px;padding:3px 9px;font-size:11px;font-weight:600}
@@ -42,7 +43,7 @@ button.tiny{font-size:12px;padding:6px 9px}
 #status{font-size:13px;color:#33536f;margin-top:12px}
 #viewer{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;padding:16px;z-index:9}
 #viewer img{max-width:100%;max-height:100%;border-radius:6px;background:#fff}
-@media(max-width:760px){.info{grid-template-columns:1fr 1fr}.fields{grid-template-columns:1fr 1fr}.receipt{grid-template-columns:80px 1fr}.thumb{width:80px;height:104px}}
+@media(max-width:760px){.fields>div:nth-child(-n+2){grid-column:1/-1}.info{grid-template-columns:1fr 1fr}.fields{grid-template-columns:1fr 1fr}.receipt{grid-template-columns:80px 1fr}.thumb{width:80px;height:104px}}
 </style>
 </head>
 <body>
@@ -78,9 +79,14 @@ button.tiny{font-size:12px;padding:6px 9px}
     <h2><span class="step">3</span>Download</h2>
     <p class="muted" style="margin-top:0">Check every amount and date against the photo first. Tap a thumbnail to enlarge it.</p>
     <div class="actions">
-      <button class="primary" id="dlExcel">Download Excel (.xlsx)</button>
-      <button class="primary" id="dlPdf">Download receipts PDF</button>
+      <button class="primary" id="dlBoth">Download Excel + PDF</button>
+      <button id="dlExcel">Excel only</button>
+      <button id="dlPdf">PDF only</button>
       <button class="danger" id="clearAll">Start over</button>
+    </div>
+    <div id="saveReady" class="hidden" style="margin-top:12px;padding:12px;border-radius:10px;background:#e8f6ec;border:1px solid #b9e0c4">
+      <b>Your files are ready.</b> <span class="muted">Tap below, then choose “Save to Files”, Mail, or another app.</span>
+      <div class="actions"><button class="primary" id="saveNow">Save files</button></div>
     </div>
     <label class="check"><input type="checkbox" id="summaryPage" checked> Put a summary page at the front of the PDF</label>
   </section>
@@ -464,10 +470,36 @@ function ready() {
 }
 function download(blob, name) {
   const u = URL.createObjectURL(blob), a = document.createElement('a');
-  a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  a.href = u; a.download = name; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(u), 60000);
 }
+// Phones (especially iPhone Safari) open a downloaded file *in place of this page*, which wipes out the
+// receipts. On phones we hand the files to the share sheet instead ("Save to Files", Mail, etc.), which
+// keeps this page open and lets both files be saved in one go.
+const isPhone = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+let readyFiles = null;
+async function saveFiles(list) {
+  const files = list.map(({blob, name}) => new File([blob], name, {type: blob.type}));
+  if (isPhone && navigator.canShare && navigator.canShare({files})) {
+    try { await navigator.share({files}); return; }
+    catch (e) {
+      if (e.name === 'AbortError') return; // she closed the share sheet
+      // Preparing the files took too long for Safari to count it as the same tap: ask for one more tap.
+      readyFiles = files; $('saveReady').classList.remove('hidden'); $('saveReady').scrollIntoView({behavior: 'smooth', block: 'center'});
+      return;
+    }
+  }
+  for (const f of files) { download(f, f.name); await new Promise(r => setTimeout(r, 400)); }
+}
+$('saveNow').onclick = async () => {
+  if (!readyFiles) return;
+  try { await navigator.share({files: readyFiles}); } catch (e) { if (e.name !== 'AbortError') { for (const f of readyFiles) { download(f, f.name); await new Promise(r => setTimeout(r, 400)); } } }
+  readyFiles = null; $('saveReady').classList.add('hidden');
+};
+// last line of defence: warn before leaving the page while receipts are loaded
+window.addEventListener('beforeunload', e => { if (receipts.length) { e.preventDefault(); e.returnValue = ''; } });
 async function withButton(btn, fn) {
+  readyFiles = null; $('saveReady').classList.add('hidden');
   const label = btn.textContent; btn.disabled = true; btn.textContent = 'Preparing…';
   try { await fn(); } catch (e) { alert('Download failed: ' + e.message); } finally { btn.disabled = false; btn.textContent = label; }
 }
@@ -567,8 +599,11 @@ async function pdfBlob() {
 }
 
 const fileBase = () => `Expense_Report_${$('week').value || dateStr(new Date())}`;
-$('dlExcel').onclick = () => { if (ready()) withButton($('dlExcel'), async () => download(await excelBlob(), fileBase() + '.xlsx')); };
-$('dlPdf').onclick = () => { if (ready()) withButton($('dlPdf'), async () => download(await pdfBlob(), fileBase() + '_Receipts.pdf')); };
+const excelFile = async () => ({blob: await excelBlob(), name: fileBase() + '.xlsx'});
+const pdfFile = async () => ({blob: await pdfBlob(), name: fileBase() + '_Receipts.pdf'});
+$('dlBoth').onclick = () => { if (ready()) withButton($('dlBoth'), async () => saveFiles([await excelFile(), await pdfFile()])); };
+$('dlExcel').onclick = () => { if (ready()) withButton($('dlExcel'), async () => saveFiles([await excelFile()])); };
+$('dlPdf').onclick = () => { if (ready()) withButton($('dlPdf'), async () => saveFiles([await pdfFile()])); };
 
 render();
 // expose the parser for testing
