@@ -109,7 +109,9 @@ let weekTouched = false;
 
 /* ---------- report details (remembered on this device for convenience) ---------- */
 function saturday(s) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + (6 - d.getDay())); return dateStr(d); }
-const infoIds = ['employee', 'match', 'client'];
+// Match # always starts as 2649040 (set in the HTML) and is never remembered between visits.
+try { localStorage.removeItem('kj-match'); } catch (e) {}
+const infoIds = ['employee', 'client'];
 infoIds.forEach(id => {
   try { const v = localStorage.getItem('kj-' + id); if (v) $(id).value = v; } catch (e) {}
   $(id).addEventListener('input', () => { try { localStorage.setItem('kj-' + id, $(id).value); } catch (e) {} });
