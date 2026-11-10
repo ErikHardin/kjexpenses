@@ -56,9 +56,9 @@ button.tiny{font-size:12px;padding:6px 9px}
     <h2><span class="step">1</span>Report details</h2>
     <div class="info">
       <div><label for="employee">Employee name</label><input id="employee" value="Kristen Ahlm"></div>
-      <div><label for="match">Match #</label><input id="match" placeholder="Match number"></div>
+      <div><label for="match">Match #</label><input id="match" value="2649040" placeholder="Match number"></div>
       <div><label for="client">Client</label><input id="client" value="Cleveland Clinic"></div>
-      <div><label for="week">Week ending (Saturday)</label><input id="week" type="date"></div>
+      <div><label for="week">Week ending (Saturday)</label><select id="week"></select></div>
     </div>
   </section>
 
@@ -111,11 +111,27 @@ let weekTouched = false;
 function saturday(s) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + (6 - d.getDay())); return dateStr(d); }
 const infoIds = ['employee', 'match', 'client'];
 infoIds.forEach(id => {
-  try { const v = localStorage.getItem('kj-' + id); if (v !== null) $(id).value = v; } catch (e) {}
+  try { const v = localStorage.getItem('kj-' + id); if (v) $(id).value = v; } catch (e) {}
   $(id).addEventListener('input', () => { try { localStorage.setItem('kj-' + id, $(id).value); } catch (e) {} });
 });
-$('week').value = saturday(dateStr(new Date()));
-$('week').addEventListener('change', () => { if ($('week').value) { $('week').value = saturday($('week').value); weekTouched = true; } });
+// Week ending: a dropdown of Saturdays only (newest first), so a non-Saturday can't be picked.
+const satLabel = s => new Date(s + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'});
+function setWeek(sat) {
+  const sel = $('week');
+  if (![...sel.options].some(o => o.value === sat)) {
+    const opt = new Option(satLabel(sat), sat);
+    const after = [...sel.options].find(o => o.value < sat);
+    sel.add(opt, after || null);
+  }
+  sel.value = sat;
+}
+(() => {
+  const sel = $('week'), d = new Date(saturday(dateStr(new Date())) + 'T12:00:00');
+  d.setDate(d.getDate() + 14);
+  for (let i = 0; i < 30; i++) { const v = dateStr(d); sel.add(new Option(satLabel(v), v)); d.setDate(d.getDate() - 7); }
+  sel.value = saturday(dateStr(new Date()));
+})();
+$('week').addEventListener('change', () => { weekTouched = true; });
 
 /* ---------- script loading ---------- */
 const scripts = {};
@@ -397,7 +413,7 @@ async function scanAll() {
 function autoWeek() {
   if (weekTouched) return;
   const dates = receipts.map(r => r.date).filter(Boolean).sort();
-  if (dates.length) $('week').value = saturday(dates[dates.length - 1]);
+  if (dates.length) setWeek(saturday(dates[dates.length - 1]));
 }
 function setStatus(t) { $('status').textContent = t; }
 
