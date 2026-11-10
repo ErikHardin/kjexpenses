@@ -278,13 +278,43 @@ function findDate(text) {
   return (labelled || found.sort((a, b) => a.idx - b.idx)[0]).v;
 }
 function findMerchant(lines) {
-  const skip = /receipt|invoice|order\s*#|date|time|phone|tel[:.]|fax|www\.|http|\.com|thank|welcome|store\s*#|cashier|server|table|guest|check\s*#|trans|merchant\s*id|terminal|^\s*\d+\s+\w+\s+(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|way|pkwy|hwy)\b/i;
+  const skip = /receipt|invoice|order|date|time|phone|tel[:.]|fax|www\.|http|\.com|@|<|thank|welcome|hope|enjoy|store\s*#|cashier|server|table|guest|check\s*#|trans|merchant\s*id|terminal|confirmation|number|payment|apple\s*pay|google\s*pay|american\s*express|amex|visa|mastercard|discover|debit|credit|total|subtotal|amount|trip|ride|summary|itinerary|booking|^(dear|hi|hello|from|to|sent|subject)\b|^\s*\d+\s+\w+\s+(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|way|pkwy|hwy)\b/i;
   for (const l of lines.slice(0, 8)) {
     const clean = l.replace(/^[^A-Za-z0-9&]+|[^A-Za-z0-9&.)']+$/g, '').trim();
     const letters = (clean.match(/[A-Za-z]/g) || []).length;
-    if (clean.length >= 3 && clean.length <= 50 && letters >= 3 && letters / clean.replace(/\s/g, '').length > 0.6 && !skip.test(clean)) return clean;
+    if (clean.split(' ').length <= 5 && clean.length >= 3 && clean.length <= 40 && letters >= 3 && letters / clean.replace(/\s/g, '').length > 0.6 && !skip.test(clean)) return clean;
   }
   return null;
+}
+// Well-known companies: checked in this order, so e.g. an Uber trip from a Marriott is still "Uber".
+const BRANDS = [
+  [/uber\s*eats/i, 'Uber Eats', 'Meals'], [/\buber\b/i, 'Uber', 'Transportation'], [/\blyft\b/i, 'Lyft', 'Transportation'],
+  [/united\s*airlines|united\.com|mileageplus/i, 'United Airlines', 'Airfare'], [/delta\s*air|delta\.com|skymiles/i, 'Delta Air Lines', 'Airfare'],
+  [/american\s*airlines|aa\.com|aadvantage/i, 'American Airlines', 'Airfare'], [/southwest/i, 'Southwest Airlines', 'Airfare'],
+  [/jetblue/i, 'JetBlue', 'Airfare'], [/alaska\s*air/i, 'Alaska Airlines', 'Airfare'], [/spirit\s*air/i, 'Spirit Airlines', 'Airfare'],
+  [/frontier\s*air|flyfrontier/i, 'Frontier Airlines', 'Airfare'], [/allegiant/i, 'Allegiant', 'Airfare'], [/breeze\s*air|flybreeze/i, 'Breeze Airways', 'Airfare'],
+  [/amtrak/i, 'Amtrak', 'Transportation'], [/hertz/i, 'Hertz', 'Transportation'], [/enterprise\s*rent|enterprise\.com/i, 'Enterprise', 'Transportation'],
+  [/\bavis\b/i, 'Avis', 'Transportation'], [/budget\s*(rent|car)/i, 'Budget', 'Transportation'], [/national\s*car/i, 'National', 'Transportation'],
+  [/alamo/i, 'Alamo', 'Transportation'], [/curb\b|yellow\s*cab/i, 'Taxi', 'Transportation'],
+  [/parkwhiz/i, 'ParkWhiz', 'Parking'], [/spothero/i, 'SpotHero', 'Parking'], [/parkmobile|park\s*mobile/i, 'ParkMobile', 'Parking'], [/sp\+|sp plus/i, 'SP+ Parking', 'Parking'],
+  [/residence\s*inn/i, 'Residence Inn', 'Hotel'], [/courtyard/i, 'Courtyard by Marriott', 'Hotel'], [/marriott/i, 'Marriott', 'Hotel'],
+  [/hampton\s*inn/i, 'Hampton Inn', 'Hotel'], [/embassy\s*suites/i, 'Embassy Suites', 'Hotel'], [/hilton/i, 'Hilton', 'Hotel'],
+  [/hyatt/i, 'Hyatt', 'Hotel'], [/sheraton/i, 'Sheraton', 'Hotel'], [/westin/i, 'Westin', 'Hotel'], [/holiday\s*inn/i, 'Holiday Inn', 'Hotel'],
+  [/best\s*western/i, 'Best Western', 'Hotel'], [/airbnb/i, 'Airbnb', 'Hotel'],
+  [/starbucks/i, 'Starbucks', 'Meals'], [/dunkin/i, "Dunkin'", 'Meals'], [/panera/i, 'Panera Bread', 'Meals'], [/chipotle/i, 'Chipotle', 'Meals'],
+  [/mcdonald/i, "McDonald's", 'Meals'], [/doordash/i, 'DoorDash', 'Meals'], [/grubhub/i, 'Grubhub', 'Meals']
+];
+function findBrand(text) { const b = BRANDS.find(([re]) => re.test(text)); return b ? {name: b[1], type: b[2]} : null; }
+// Use the file name when it was named on purpose, e.g. "Home to DEN 10-25-26.pdf" → "Home to DEN" + 10/25/2026
+function fileInfo(filename) {
+  let base = filename.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+  let date = null, m;
+  if ((m = base.match(/(20\d{2})[-. ](\d{1,2})[-. ](\d{1,2})(?!\d)/))) date = validDate(m[1], m[2], m[3]);
+  else if ((m = base.match(/(?<!\d)(\d{1,2})[-. ](\d{1,2})[-. ](20\d{2}|\d{2})(?!\d)/))) date = validDate(m[3], m[1], m[2]);
+  if (m) base = base.replace(m[0], ' ');
+  let label = base.replace(/\s+/g, ' ').replace(/^[\s\-–,.]+|[\s\-–,.]+$/g, '').replace(/^receipt\b[\s\-–:]*/i, '');
+  if (!/[a-z]{2}/i.test(label) || /^(img|image|pxl|dsc|dcim|photo|scan|screenshot|screen shot|document|doc|file|untitled|whatsapp|signal|attachment|download)\b|^[0-9a-f-]{16,}$/i.test(label)) label = '';
+  return {label, date};
 }
 function guessType(text) {
   const s = text.toLowerCase();
@@ -298,14 +328,15 @@ function guessType(text) {
 function parseReceipt(text) {
   const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const total = findTotal(lines);
-  return {amount: total.amount, sure: total.sure, date: findDate(text), merchant: findMerchant(lines), type: guessType(text)};
+  const brand = findBrand(text);
+  return {amount: total.amount, sure: total.sure, date: findDate(text), merchant: brand ? brand.name : findMerchant(lines), brand: !!brand, type: brand ? brand.type : guessType(text)};
 }
 
 /* ---------- adding & scanning ---------- */
 function addFiles(list) {
   const files = [...list].filter(f => f.type.startsWith('image/') || f.type === 'application/pdf' || /\.(pdf|png|jpe?g|webp|heic|heif|gif|bmp)$/i.test(f.name));
   if (!files.length) return;
-  for (const file of files) receipts.push({id: Math.random().toString(36).slice(2), file, name: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '), date: '', amount: '', type: 'Other', status: 'waiting', note: '', pages: []});
+  for (const file of files) receipts.push({id: Math.random().toString(36).slice(2), file, name: fileInfo(file.name).label || file.name.replace(/\.[^.]+$/, ''), date: fileInfo(file.name).date || '', amount: '', type: 'Other', status: 'waiting', note: '', pages: []});
   render();
   scanAll();
 }
@@ -335,14 +366,18 @@ async function scanAll() {
       const p = parseReceipt(text);
       if (!receipts.includes(r)) continue; // removed while scanning
       if (r.amount === '' && p.amount != null) r.amount = p.amount.toFixed(2);
+      const fi = fileInfo(r.file.name);
       if (!r.date && p.date) r.date = p.date;
-      if (p.merchant) r.name = p.merchant;
+      // description: "Company – what she named the file", e.g. "Uber – Home to DEN"
+      if (fi.label) r.name = p.brand && !fi.label.toLowerCase().includes(p.merchant.toLowerCase().split(' ')[0]) ? `${p.merchant} – ${fi.label}` : fi.label;
+      else if (p.merchant) r.name = p.merchant;
       r.type = p.type;
       r.status = 'done';
       r.note = p.amount == null ? 'Couldn’t find the total — please type it in.'
         : !p.sure ? 'Total is a best guess — please double-check it.'
         : 'Check the total and date against the photo.';
-      if (!p.date) r.note += ' Date not found — please enter it.';
+      if (fi.date && p.date && fi.date !== p.date) r.note += ` Date taken from the file name (receipt also shows ${pretty(p.date)}).`;
+      else if (!r.date) r.note += ' Date not found — please enter it.';
     } catch (e) {
       r.status = 'error';
       r.note = 'Couldn’t read this one automatically (' + e.message + ') Please type the details in.';
@@ -538,6 +573,7 @@ $('dlPdf').onclick = () => { if (ready()) withButton($('dlPdf'), async () => dow
 render();
 // expose the parser for testing
 window.__parseReceipt = parseReceipt;
+window.__fileInfo = fileInfo;
 })();
 </script>
 </body>
