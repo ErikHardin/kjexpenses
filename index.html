@@ -49,7 +49,7 @@ button.tiny{font-size:12px;padding:6px 9px}
 <body>
 <header>
   <h1>KJ <span style="color:#68c5ff">/</span> Expense Report</h1>
-  <p>Upload receipt photos → check the numbers → download the Excel report and receipts PDF. Nothing is saved or uploaded anywhere.</p>
+  <p>Upload receipt photos → check the numbers → download the Excel report, receipts PDF and invoice. Nothing is saved or uploaded anywhere.</p>
 </header>
 <main>
   <section class="card">
@@ -59,6 +59,11 @@ button.tiny{font-size:12px;padding:6px 9px}
       <div><label for="match">Match #</label><input id="match" value="2649040" placeholder="Match number"></div>
       <div><label for="client">Client</label><input id="client" value="Cleveland Clinic"></div>
       <div><label for="week">Week ending (Saturday)</label><select id="week"></select></div>
+    </div>
+    <div class="info" style="margin-top:12px">
+      <div><label for="invNum">Invoice #</label><input id="invNum" inputmode="numeric" placeholder="e.g. 2"></div>
+      <div><label for="invDate">Invoice date</label><input id="invDate" type="date"></div>
+      <div style="grid-column:span 2"><label for="billTo">Bill to</label><input id="billTo" value="Beacon Hill Solutions Group, LLC"></div>
     </div>
   </section>
 
@@ -79,9 +84,10 @@ button.tiny{font-size:12px;padding:6px 9px}
     <h2><span class="step">3</span>Download</h2>
     <p class="muted" style="margin-top:0">Check every amount and date against the photo first. Tap a thumbnail to enlarge it.</p>
     <div class="actions">
-      <button class="primary" id="dlBoth">Download Excel + PDF</button>
+      <button class="primary" id="dlBoth">Download all 3 files</button>
       <button id="dlExcel">Excel only</button>
-      <button id="dlPdf">PDF only</button>
+      <button id="dlPdf">Receipts PDF only</button>
+      <button id="dlInvoice">Invoice only</button>
       <button class="danger" id="clearAll">Start over</button>
     </div>
     <div id="saveReady" class="hidden" style="margin-top:12px;padding:12px;border-radius:10px;background:#e8f6ec;border:1px solid #b9e0c4">
@@ -111,7 +117,8 @@ let weekTouched = false;
 function saturday(s) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + (6 - d.getDay())); return dateStr(d); }
 // Match # always starts as 2649040 (set in the HTML) and is never remembered between visits.
 try { localStorage.removeItem('kj-match'); } catch (e) {}
-const infoIds = ['employee', 'client'];
+const infoIds = ['employee', 'client', 'billTo'];
+$('invDate').value = dateStr(new Date());
 infoIds.forEach(id => {
   try { const v = localStorage.getItem('kj-' + id); if (v) $(id).value = v; } catch (e) {}
   $(id).addEventListener('input', () => { try { localStorage.setItem('kj-' + id, $(id).value); } catch (e) {} });
@@ -475,7 +482,10 @@ $('files').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 $('clearAll').onclick = () => { if (receipts.length && confirm('Remove all receipts and start over?')) { receipts = []; weekTouched = false; render(); setStatus(''); } };
 
 /* ---------- exports ---------- */
-function info() { return {employee: $('employee').value.trim(), match: $('match').value.trim(), client: $('client').value.trim(), week: $('week').value}; }
+function info() {
+  return {employee: $('employee').value.trim(), match: $('match').value.trim(), client: $('client').value.trim(), week: $('week').value,
+    invNum: $('invNum').value.trim(), invDate: $('invDate').value, billTo: $('billTo').value.trim()};
+}
 function rows() { return [...receipts].sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
 function ready() {
   if (!receipts.length) { alert('Add at least one receipt first.'); return false; }
@@ -616,10 +626,101 @@ async function pdfBlob() {
   return doc.output('blob');
 }
 
+/* ---------- invoice PDF (same look as the KJ Consulting hours invoice) ---------- */
+const shortDate = s => s ? `${+s.slice(5, 7)}/${+s.slice(8, 10)}/${s.slice(2, 4)}` : '';
+function buildInvoice(i, a) {
+  const {jsPDF} = window.jspdf, total = a.reduce((s, r) => s + num(r.amount), 0);
+  const doc = new jsPDF({unit: 'pt', format: 'letter', orientation: 'portrait'});
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), L = 46, R = W - 46;
+  const NAVY = [24, 50, 79], GOLD = [201, 162, 92], GRAY = [92, 104, 120], TINT = [238, 242, 246], LINE = [176, 192, 210], INK = [30, 52, 80];
+  const label = (t, x, y, opt) => { doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...GRAY); doc.text(t, x, y, opt); };
+  const value = (t, x, y, opt) => { doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...INK); doc.text(String(t ?? ''), x, y, opt); };
+  const rule = (x1, x2, y) => { doc.setDrawColor(...LINE); doc.setLineWidth(0.6); doc.line(x1, y, x2, y); };
+
+  // header band with logo
+  doc.setFillColor(...NAVY); doc.rect(0, 0, W, 104, 'F');
+  doc.setDrawColor(...GOLD); doc.setLineWidth(1.4); doc.roundedRect(L, 32, 44, 44, 4, 4, 'S');
+  doc.setLineWidth(0.5); doc.rect(L + 6, 38, 32, 32, 'S'); doc.line(L + 10, 62, L + 34, 62);
+  doc.setFont('times', 'bold'); doc.setFontSize(18); doc.setTextColor(255); doc.text('KJ', L + 22, 59, {align: 'center'});
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.text('KJ Consulting, LLC', L + 56, 52);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...GOLD); doc.text('CONSULTING SERVICES', L + 56, 69);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(255); doc.text('INVOICE', R, 52, {align: 'right'});
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...GOLD); doc.text('REIMBURSABLE EXPENSES', R, 69, {align: 'right'});
+
+  // invoice facts
+  const c = [L, L + 150, L + 300];
+  label('INVOICE DATE (MM/DD/YYYY)', c[0], 128); label('INVOICE NUMBER', c[1], 128); label('WEEK ENDING (SATURDAY) - MM/DD/YYYY', c[2], 128);
+  value(shortDate(i.invDate), c[0] + 2, 150); value(i.invNum, c[1] + 2, 150); value(shortDate(i.week), c[2] + 2, 150);
+  rule(c[0], c[0] + 130, 157); rule(c[1], c[1] + 130, 157); rule(c[2], R, 157);
+  label('CONSULTANT', c[0], 184); label('CLIENT', c[1], 184); label('MATCH #', c[2], 184);
+  value(i.employee, c[0] + 2, 206); value(i.client, c[1] + 2, 206); value(i.match, c[2] + 2, 206);
+  rule(c[0], c[0] + 130, 213); rule(c[1], c[1] + 130, 213); rule(c[2], R, 213);
+
+  // bill to / payment details
+  const bw = (R - L - 16) / 2;
+  [[L, 'BILL TO', i.billTo], [L + bw + 16, 'PAYMENT DETAILS', '']].forEach(([x, t, v]) => {
+    doc.setFillColor(...TINT); doc.roundedRect(x, 236, bw, 70, 5, 5, 'F');
+    label(t, x + 12, 254);
+    doc.setFillColor(255); doc.rect(x + 12, 262, bw - 24, 17, 'F'); doc.rect(x + 12, 282, bw - 24, 17, 'F');
+    rule(x + 12, x + bw - 12, 279); rule(x + 12, x + bw - 12, 299);
+    value(v, x + 16, 274);
+  });
+
+  // line items
+  const col = {desc: L + 12, date: L + 290, type: L + 360, amt: R - 12};
+  const tableHead = y => {
+    doc.setFillColor(...NAVY); doc.roundedRect(L, y, R - L, 22, 4, 4, 'F');
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7.5); doc.setTextColor(255);
+    doc.text('DESCRIPTION OF EXPENSES', col.desc, y + 14); doc.text('DATE', col.date, y + 14); doc.text('TYPE', col.type, y + 14); doc.text('AMOUNT', col.amt, y + 14, {align: 'right'});
+    return y + 22;
+  };
+  const footer = () => {
+    rule(L, R, H - 50);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...GRAY);
+    doc.text('Thank you for your business.', L, H - 36); doc.text('KJ Consulting, LLC', R, H - 36, {align: 'right'});
+  };
+  let y = tableHead(328);
+  const rowH = 26;
+  a.forEach((r, j) => {
+    if (y + rowH > H - 70) { footer(); doc.addPage('letter', 'portrait'); y = tableHead(46); }
+    if (j % 2) { doc.setFillColor(248, 250, 252); doc.rect(L, y, R - L, rowH, 'F'); }
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+    const desc = doc.splitTextToSize(r.name || r.type, col.date - col.desc - 16)[0];
+    value(desc, col.desc, y + 17); value(shortDate(r.date), col.date, y + 17); value(r.type, col.type, y + 17);
+    value(fmt(num(r.amount)), col.amt, y + 17, {align: 'right'});
+    rule(L + 8, R - 8, y + rowH - 1);
+    y += rowH;
+  });
+
+  // totals + notes (move to a fresh page if they won't fit)
+  if (y + 190 > H - 60) { footer(); doc.addPage('letter', 'portrait'); y = 30; }
+  y += 30;
+  const tl = R - 200;
+  label('SUBTOTAL', tl + 85, y, {align: 'right'}); value(fmt(total), col.amt, y, {align: 'right'}); rule(tl + 100, R - 8, y + 6);
+  y += 26;
+  label('TAX (IF APPLICABLE)', tl + 85, y, {align: 'right'}); value('N/A', col.amt, y, {align: 'right'}); rule(tl + 100, R - 8, y + 6);
+  y += 16;
+  doc.setFillColor(...TINT); doc.roundedRect(tl - 20, y, R - tl + 20, 30, 5, 5, 'F');
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...NAVY); doc.text('TOTAL DUE', tl, y + 19);
+  doc.setFontSize(11); doc.text(fmt(total), col.amt, y + 19.5, {align: 'right'});
+  y += 62;
+
+  label('NOTES / ADDITIONAL DETAILS', L, y);
+  const note = `Reimbursable business expenses for ${i.client || 'client'} engagement (Match # ${i.match || '-'}), week ending ${pretty(i.week)}. ` +
+    `${a.length} itemized receipt${a.length === 1 ? '' : 's'} provided in the accompanying receipts PDF.`;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...INK);
+  doc.text(doc.splitTextToSize(note, R - L - 12), L + 2, y + 18);
+  footer();
+  return doc.output('blob');
+}
+async function invoiceBlob() { await loadScript(LIB.jspdf); return buildInvoice(info(), rows()); }
+
 const fileBase = () => `Expense_Report_${$('week').value || dateStr(new Date())}`;
 const excelFile = async () => ({blob: await excelBlob(), name: fileBase() + '.xlsx'});
 const pdfFile = async () => ({blob: await pdfBlob(), name: fileBase() + '_Receipts.pdf'});
-$('dlBoth').onclick = () => { if (ready()) withButton($('dlBoth'), async () => saveFiles([await excelFile(), await pdfFile()])); };
+const invoiceFile = async () => ({blob: await invoiceBlob(), name: `KJ_Consulting_Invoice_Expenses_Week_Ending_${$('week').value || dateStr(new Date())}.pdf`});
+$('dlBoth').onclick = () => { if (ready()) withButton($('dlBoth'), async () => saveFiles([await excelFile(), await pdfFile(), await invoiceFile()])); };
+$('dlInvoice').onclick = () => { if (ready()) withButton($('dlInvoice'), async () => saveFiles([await invoiceFile()])); };
 $('dlExcel').onclick = () => { if (ready()) withButton($('dlExcel'), async () => saveFiles([await excelFile()])); };
 $('dlPdf').onclick = () => { if (ready()) withButton($('dlPdf'), async () => saveFiles([await pdfFile()])); };
 
@@ -627,6 +728,7 @@ render();
 // expose the parser for testing
 window.__parseReceipt = parseReceipt;
 window.__fileInfo = fileInfo;
+window.__buildInvoice = async (i, a) => { await loadScript(LIB.jspdf); return buildInvoice(i, a); };
 })();
 </script>
 </body>
