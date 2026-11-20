@@ -86,7 +86,7 @@ button.tiny{font-size:12px;padding:6px 9px}
     <div class="totalbar hidden" id="totalbar"><span id="countLabel"></span><span id="totalLabel"></span></div>
   </section>
 
-  <section class="card">
+  <section class="card hidden" id="pdCard">
     <h2><span class="step">3</span>Per diem</h2>
     <div class="info">
       <div><label for="pdRate">Daily rate ($)</label><input id="pdRate" inputmode="decimal" value="50.00"></div>
@@ -98,7 +98,7 @@ button.tiny{font-size:12px;padding:6px 9px}
   </section>
 
   <section class="card">
-    <h2><span class="step">4</span>Download</h2>
+    <h2><span class="step" id="dlStep">3</span>Download</h2>
     <p class="muted" style="margin-top:0">Check every amount and date against the photo first. Tap a thumbnail to enlarge it.</p>
     <div class="actions">
       <button class="primary" id="dlBoth">Download all 3 files</button>
@@ -558,7 +558,9 @@ function updateTotal() {
 let pdOff = new Set(), pdExtra = new Set();   // days she unticked / added by hand
 const weekStart = () => addDays($('week').value, -6);
 // every on-site day in the selected week (check-in through check-out, full rate): {date, manual, on, amount}
+const hasHotel = () => receipts.some(r => r.type === 'Hotel');
 function perDiemDays() {
+  if (!hasHotel()) return {days: [], outside: 0};   // per diem only applies once a hotel receipt is loaded
   const rate = num($('pdRate').value), stay = new Set();
   for (const r of receipts) {
     if (r.type !== 'Hotel' || !isDate(r.stayIn) || !isDate(r.stayOut) || r.stayOut < r.stayIn) continue;
@@ -581,6 +583,8 @@ function perDiemRows() {
 const dayLabel = s => new Date(s + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: '2-digit', day: '2-digit', year: 'numeric'});
 function renderPerDiem() {
   if (!$('pdList')) return;
+  $('pdCard').classList.toggle('hidden', !hasHotel());
+  $('dlStep').textContent = hasHotel() ? '4' : '3';
   const {days, outside} = perDiemDays();
   $('pdList').innerHTML = (days.length ? days.map(d => `<div class="pdrow ${d.on ? '' : 'off'}">
       <input type="checkbox" data-pd="${d.date}" ${d.on ? 'checked' : ''} aria-label="Include ${d.date}">
