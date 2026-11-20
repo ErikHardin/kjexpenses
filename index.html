@@ -40,6 +40,12 @@ button.tiny{font-size:12px;padding:6px 9px}
 .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
 .check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;margin:10px 0 0;color:#33536f}
 .check input{width:auto}
+.stay{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;padding:8px 10px;border-radius:8px;background:#eef5ff}
+.pdrow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #edf1f5;font-size:14px}
+.pdrow input{width:auto}
+.pdrow.off{color:#9aa8b6;text-decoration:line-through}
+.pdadd{display:flex;gap:8px;align-items:center;margin-top:10px}
+.pdadd input{max-width:190px}
 #status{font-size:13px;color:#33536f;margin-top:12px}
 #viewer{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;padding:16px;z-index:9}
 #viewer img{max-width:100%;max-height:100%;border-radius:6px;background:#fff}
@@ -81,7 +87,18 @@ button.tiny{font-size:12px;padding:6px 9px}
   </section>
 
   <section class="card">
-    <h2><span class="step">3</span>Download</h2>
+    <h2><span class="step">3</span>Per diem</h2>
+    <div class="info">
+      <div><label for="pdRate">Daily rate ($)</label><input id="pdRate" inputmode="decimal" value="50.00"></div>
+    </div>
+    <p class="muted">Added automatically for every day of each hotel stay in the selected week, from check-in through check-out. Untick a day you weren’t on site, or add a day without a hotel.</p>
+    <div id="pdList"></div>
+    <div class="pdadd"><input type="date" id="pdNew" aria-label="Add a per diem day"><button class="tiny" id="pdAddBtn">+ Add day</button></div>
+    <div class="totalbar" id="pdTotalbar"><span id="pdCount"></span><span id="pdTotal"></span></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="step">4</span>Download</h2>
     <p class="muted" style="margin-top:0">Check every amount and date against the photo first. Tap a thumbnail to enlarge it.</p>
     <div class="actions">
       <button class="primary" id="dlBoth">Download all 3 files</button>
@@ -117,7 +134,7 @@ let weekTouched = false;
 function saturday(s) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + (6 - d.getDay())); return dateStr(d); }
 // Match # always starts as 2649040 (set in the HTML) and is never remembered between visits.
 try { localStorage.removeItem('kj-match'); } catch (e) {}
-const infoIds = ['employee', 'client', 'billTo'];
+const infoIds = ['employee', 'client', 'billTo', 'pdRate'];
 $('invDate').value = dateStr(new Date());
 infoIds.forEach(id => {
   try { const v = localStorage.getItem('kj-' + id); if (v) $(id).value = v; } catch (e) {}
@@ -133,6 +150,7 @@ function setWeek(sat) {
     sel.add(opt, after || null);
   }
   sel.value = sat;
+  renderPerDiem();
 }
 (() => {
   const sel = $('week'), d = new Date(saturday(dateStr(new Date())) + 'T12:00:00');
@@ -140,7 +158,7 @@ function setWeek(sat) {
   for (let i = 0; i < 30; i++) { const v = dateStr(d); sel.add(new Option(satLabel(v), v)); d.setDate(d.getDate() - 7); }
   sel.value = saturday(dateStr(new Date()));
 })();
-$('week').addEventListener('change', () => { weekTouched = true; });
+$('week').addEventListener('change', () => { weekTouched = true; renderPerDiem(); updateTotal(); });
 
 /* ---------- script loading ---------- */
 const scripts = {};
@@ -295,18 +313,63 @@ function validDate(y, m, d) {
   if (y < 2015 || dt > new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2)) return null;
   return `${y}-${pad(m)}-${pad(d)}`;
 }
-function findDate(text) {
+// every date on the receipt, in reading order: {idx, end, v: 'YYYY-MM-DD'}
+function datesIn(text) {
   const t = text.replace(/[Oo](?=\d)|(?<=\d)[Oo]/g, '0');
   const found = [];
-  const push = (idx, v) => { if (v) found.push({idx, v}); };
-  for (const m of t.matchAll(/\b(20\d{2})[\/.-](\d{1,2})[\/.-](\d{1,2})\b/g)) push(m.index, validDate(m[1], m[2], m[3]));
-  for (const m of t.matchAll(/\b(\d{1,2})\s?[\/.-]\s?(\d{1,2})\s?[\/.-]\s?(20\d{2}|\d{2})(?!\d)/g)) push(m.index, validDate(m[3], m[1], m[2]));
-  for (const m of t.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2}|\d{2})\b/gi)) push(m.index, validDate(m[3], MONTHS[m[1].toLowerCase()], m[2]));
-  for (const m of t.matchAll(/\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?\s+(20\d{2}|\d{2})\b/gi)) push(m.index, validDate(m[3], MONTHS[m[2].toLowerCase()], m[1]));
+  const push = (m, v) => { if (v && !found.some(f => m.index < f.end && f.idx < m.index + m[0].length)) found.push({idx: m.index, end: m.index + m[0].length, v}); };
+  for (const m of t.matchAll(/\b(20\d{2})[\/.-](\d{1,2})[\/.-](\d{1,2})\b/g)) push(m, validDate(m[1], m[2], m[3]));
+  for (const m of t.matchAll(/\b(\d{1,2})\s?[\/.-]\s?(\d{1,2})\s?[\/.-]\s?(20\d{2}|\d{2})(?!\d)/g)) push(m, validDate(m[3], m[1], m[2]));
+  for (const m of t.matchAll(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(20\d{2}|\d{2})\b/gi)) push(m, validDate(m[3], MONTHS[m[1].toLowerCase()], m[2]));
+  // "16 Nov 2026", "16-Nov-26", "16NOV26" (hotel folios love these)
+  for (const m of t.matchAll(/\b(\d{1,2})[\s-]*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?,?[\s-]*(20\d{2}|\d{2})\b/gi)) push(m, validDate(m[3], MONTHS[m[2].toLowerCase()], m[1]));
+  return {t, found: found.sort((a, b) => a.idx - b.idx)};
+}
+function findDate(text) {
+  const {t, found} = datesIn(text);
   if (!found.length) return null;
   // a date on a line that says "date" wins, otherwise the first one on the receipt
   const labelled = found.find(f => /date/i.test(t.slice(Math.max(0, f.idx - 25), f.idx)));
-  return (labelled || found.sort((a, b) => a.idx - b.idx)[0]).v;
+  return (labelled || found[0]).v;
+}
+const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+const addDays = (s, n) => { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + n); return dateStr(d); };
+const daysBetween = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
+// Hotel folio → {in, out, guess}. Looks for dates labelled arrival/check-in and departure/check-out,
+// including the table layout where the labels sit on one line and the dates on the next.
+function findStay(text) {
+  const {t, found} = datesIn(text);
+  if (!found.length) return null;
+  const ARR = /arriv|arr\.?\s*date|check[\s-]*in|\bin\s*date/gi, DEP = /depart|dep\.?\s*date|check[\s-]*out|\bout\s*date/gi;
+  const lastHit = (re, s) => { let p = -1; for (const m of s.matchAll(re)) p = m.index; return p; };
+  let arr = null, dep = null;
+  found.forEach((f, k) => {
+    const from = Math.max(k ? found[k - 1].end : 0, f.idx - 40, t.lastIndexOf('\n', f.idx - 1) + 1);
+    const before = t.slice(from, f.idx), a = lastHit(ARR, before), d = lastHit(DEP, before);
+    if (a > d && !arr) arr = f.v;
+    else if (d > a && !dep) dep = f.v;
+  });
+  if (!arr || !dep) {
+    // labels on one line, dates on the next
+    const lines = t.split('\n');
+    let off = 0;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const l = lines[i], a = lastHit(ARR, l), d = lastHit(DEP, l);
+      const start = off + l.length + 1, end = start + lines[i + 1].length;
+      off = start;
+      if (a < 0 || d < 0) continue;
+      const below = found.filter(f => f.idx >= start && f.idx < end);
+      if (below.length >= 2) { [arr, dep] = a < d ? [below[0].v, below[1].v] : [below[1].v, below[0].v]; break; }
+    }
+  }
+  const nights = (t.match(/\b(\d{1,2})\s*nights?\b/i) || [])[1];
+  if (arr && !dep && nights) dep = addDays(arr, +nights);
+  if (dep && !arr && nights) arr = addDays(dep, -nights);
+  if (arr && dep && dep > arr && daysBetween(arr, dep) <= 31) return {in: arr, out: dep, guess: false};
+  // fallback: first and last date printed on the folio (daily room charges usually span the stay)
+  const all = found.map(f => f.v).sort(), lo = all[0], hi = all[all.length - 1];
+  if (hi > lo && daysBetween(lo, hi) <= 21) return {in: lo, out: hi, guess: true};
+  return null;
 }
 function findMerchant(lines) {
   const skip = /receipt|invoice|order|date|time|phone|tel[:.]|fax|www\.|http|\.com|@|<|thank|welcome|hope|enjoy|store\s*#|cashier|server|table|guest|check\s*#|trans|merchant\s*id|terminal|confirmation|number|payment|apple\s*pay|google\s*pay|american\s*express|amex|visa|mastercard|discover|debit|credit|total|subtotal|amount|trip|ride|summary|itinerary|booking|^(dear|hi|hello|from|to|sent|subject)\b|^\s*\d+\s+\w+\s+(st|street|ave|avenue|rd|road|blvd|dr|drive|ln|way|pkwy|hwy)\b/i;
@@ -360,14 +423,16 @@ function parseReceipt(text) {
   const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const total = findTotal(lines);
   const brand = findBrand(text);
-  return {amount: total.amount, sure: total.sure, date: findDate(text), merchant: brand ? brand.name : findMerchant(lines), brand: !!brand, type: brand ? brand.type : guessType(text)};
+  const type = brand ? brand.type : guessType(text);
+  return {amount: total.amount, sure: total.sure, date: findDate(text), merchant: brand ? brand.name : findMerchant(lines), brand: !!brand, type,
+    stay: type === 'Hotel' ? findStay(text) : null};
 }
 
 /* ---------- adding & scanning ---------- */
 function addFiles(list) {
   const files = [...list].filter(f => f.type.startsWith('image/') || f.type === 'application/pdf' || /\.(pdf|png|jpe?g|webp|heic|heif|gif|bmp)$/i.test(f.name));
   if (!files.length) return;
-  for (const file of files) receipts.push({id: Math.random().toString(36).slice(2), file, name: fileInfo(file.name).label || file.name.replace(/\.[^.]+$/, ''), date: fileInfo(file.name).date || '', amount: '', type: 'Other', status: 'waiting', note: '', pages: []});
+  for (const file of files) receipts.push({id: Math.random().toString(36).slice(2), file, name: fileInfo(file.name).label || file.name.replace(/\.[^.]+$/, ''), date: fileInfo(file.name).date || '', amount: '', type: 'Other', status: 'waiting', note: '', pages: [], stayIn: '', stayOut: ''});
   render();
   scanAll();
 }
@@ -409,6 +474,11 @@ async function scanAll() {
         : 'Check the total and date against the photo.';
       if (fi.date && p.date && fi.date !== p.date) r.note += ` Date taken from the file name (receipt also shows ${pretty(p.date)}).`;
       else if (!r.date) r.note += ' Date not found — please enter it.';
+      if (p.type === 'Hotel') {
+        if (p.stay && !r.stayIn && !r.stayOut) { r.stayIn = p.stay.in; r.stayOut = p.stay.out; }
+        r.note += p.stay ? ` Stay ${pretty(p.stay.in)} – ${pretty(p.stay.out)}${p.stay.guess ? ' is a best guess — please check' : ' found'}; per diem added for each day.`
+          : ' Check-in/check-out dates not found — enter them below to add per diem.';
+      }
     } catch (e) {
       r.status = 'error';
       r.note = 'Couldn’t read this one automatically (' + e.message + ') Please type the details in.';
@@ -417,11 +487,12 @@ async function scanAll() {
   }
   busy = false;
   autoWeek();
+  renderPerDiem(); updateTotal();
   setStatus(receipts.length ? 'Done reading. Please check each total and date before downloading.' : '');
 }
 function autoWeek() {
   if (weekTouched) return;
-  const dates = receipts.map(r => r.date).filter(Boolean).sort();
+  const dates = receipts.flatMap(r => [r.date, r.type === 'Hotel' ? r.stayOut : '']).filter(isDate).sort();
   if (dates.length) setWeek(saturday(dates[dates.length - 1]));
 }
 function setStatus(t) { $('status').textContent = t; }
@@ -445,6 +516,10 @@ function render() {
           <div><label>Total ($)</label><input type="text" inputmode="decimal" placeholder="0.00" data-i="${i}" data-f="amount" value="${esc(r.amount)}"></div>
           <div><label>Type</label><select data-i="${i}" data-f="type">${TYPES.map(t => `<option ${r.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         </div>
+        ${r.type === 'Hotel' ? `<div class="stay">
+          <div><label>Check-in</label><input type="date" data-i="${i}" data-f="stayIn" value="${esc(r.stayIn)}"></div>
+          <div><label>Check-out</label><input type="date" data-i="${i}" data-f="stayOut" value="${esc(r.stayOut)}"></div>
+        </div>` : ''}
         <div class="row"><div class="note">${esc(r.note)}</div><button class="tiny danger" data-remove="${i}">Remove</button></div>
       </div>
     </div>`;
@@ -452,11 +527,15 @@ function render() {
   el.querySelectorAll('[data-f]').forEach(inp => inp.addEventListener('input', () => {
     const r = receipts[+inp.dataset.i];
     if (!r) return;
-    r[inp.dataset.f] = inp.value;
-    if (inp.dataset.f === 'date') autoWeek();
+    const f = inp.dataset.f;
+    r[f] = inp.value;
+    if (f === 'type') { render(); return; } // show/hide the hotel stay dates
+    if (f === 'date' || f === 'stayIn' || f === 'stayOut') autoWeek();
+    if (f === 'stayIn' || f === 'stayOut') renderPerDiem();
     updateTotal();
   }));
   el.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { receipts.splice(+b.dataset.remove, 1); render(); });
+  renderPerDiem();
   el.querySelectorAll('[data-view]').forEach(t => t.onclick = () => {
     const r = receipts[+t.dataset.view];
     if (!r || !r.pages[0]) return;
@@ -470,7 +549,55 @@ function updateTotal() {
   $('totalbar').classList.toggle('hidden', !receipts.length);
   $('countLabel').textContent = `${receipts.length} receipt${receipts.length === 1 ? '' : 's'}`;
   $('totalLabel').textContent = 'Total ' + fmt(receipts.reduce((s, r) => s + (num(r.amount) || 0), 0));
+  const pd = perDiemRows();
+  $('pdCount').textContent = `${pd.length} per diem day${pd.length === 1 ? '' : 's'}`;
+  $('pdTotal').textContent = 'Per diem ' + fmt(pd.reduce((s, r) => s + num(r.amount), 0));
 }
+
+/* ---------- per diem ---------- */
+let pdOff = new Set(), pdExtra = new Set();   // days she unticked / added by hand
+const weekStart = () => addDays($('week').value, -6);
+// every on-site day in the selected week (check-in through check-out, full rate): {date, manual, on, amount}
+function perDiemDays() {
+  const rate = num($('pdRate').value), stay = new Set();
+  for (const r of receipts) {
+    if (r.type !== 'Hotel' || !isDate(r.stayIn) || !isDate(r.stayOut) || r.stayOut < r.stayIn) continue;
+    const n = daysBetween(r.stayIn, r.stayOut);
+    if (n <= 31) for (let k = 0; k <= n; k++) stay.add(addDays(r.stayIn, k));
+  }
+  const lo = weekStart(), hi = $('week').value;
+  let outside = 0;
+  const days = [];
+  for (const date of [...new Set([...stay, ...pdExtra])].sort()) {
+    if (date < lo || date > hi) { outside++; continue; }
+    days.push({date, manual: !stay.has(date), on: !pdOff.has(date), amount: Number.isFinite(rate) ? Math.round(rate * 100) / 100 : NaN});
+  }
+  return {days, outside};
+}
+function perDiemRows() {
+  return perDiemDays().days.filter(d => d.on).map(d => ({name: 'Per Diem', type: 'Per Diem',
+    date: d.date, amount: Number.isFinite(d.amount) ? d.amount.toFixed(2) : '', pages: [], perDiem: true}));
+}
+const dayLabel = s => new Date(s + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: '2-digit', day: '2-digit', year: 'numeric'});
+function renderPerDiem() {
+  if (!$('pdList')) return;
+  const {days, outside} = perDiemDays();
+  $('pdList').innerHTML = (days.length ? days.map(d => `<div class="pdrow ${d.on ? '' : 'off'}">
+      <input type="checkbox" data-pd="${d.date}" ${d.on ? 'checked' : ''} aria-label="Include ${d.date}">
+      <span>${dayLabel(d.date)}</span>
+      <span style="display:flex;gap:8px;align-items:center"><b>${Number.isFinite(d.amount) ? fmt(d.amount) : '—'}</b>${d.manual ? `<button class="tiny danger" data-pdx="${d.date}">✕</button>` : ''}</span>
+    </div>`).join('') : '<p class="note">No per diem days yet — they appear here once a hotel receipt with check-in/check-out dates is added.</p>')
+    + (outside ? `<p class="note">${outside} day${outside === 1 ? '' : 's'} of a hotel stay fall outside the week ending ${pretty($('week').value)} and ${outside === 1 ? 'isn’t' : 'aren’t'} included.</p>` : '');
+  $('pdList').querySelectorAll('[data-pd]').forEach(c => c.onchange = () => { c.checked ? pdOff.delete(c.dataset.pd) : pdOff.add(c.dataset.pd); renderPerDiem(); updateTotal(); });
+  $('pdList').querySelectorAll('[data-pdx]').forEach(b => b.onclick = () => { pdExtra.delete(b.dataset.pdx); renderPerDiem(); updateTotal(); });
+}
+['pdRate'].forEach(id => $(id).addEventListener('input', () => { renderPerDiem(); updateTotal(); }));
+$('pdAddBtn').onclick = () => {
+  const d = $('pdNew').value;
+  if (!isDate(d)) { alert('Pick a date first.'); return; }
+  if (d < weekStart() || d > $('week').value) { alert(`That day isn’t in the week ending ${pretty($('week').value)}.`); return; }
+  pdExtra.add(d); pdOff.delete(d); $('pdNew').value = ''; renderPerDiem(); updateTotal();
+};
 $('viewer').onclick = () => $('viewer').classList.add('hidden');
 const drop = $('drop');
 drop.onclick = () => $('files').click();
@@ -479,16 +606,18 @@ drop.ondragover = e => { e.preventDefault(); drop.classList.add('drag'); };
 drop.ondragleave = () => drop.classList.remove('drag');
 drop.ondrop = e => { e.preventDefault(); drop.classList.remove('drag'); addFiles(e.dataTransfer.files); };
 $('files').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
-$('clearAll').onclick = () => { if (receipts.length && confirm('Remove all receipts and start over?')) { receipts = []; weekTouched = false; render(); setStatus(''); } };
+$('clearAll').onclick = () => { if (receipts.length && confirm('Remove all receipts and start over?')) { receipts = []; pdOff = new Set(); pdExtra = new Set(); weekTouched = false; render(); setStatus(''); } };
 
 /* ---------- exports ---------- */
 function info() {
   return {employee: $('employee').value.trim(), match: $('match').value.trim(), client: $('client').value.trim(), week: $('week').value,
     invNum: $('invNum').value.trim(), invDate: $('invDate').value, billTo: $('billTo').value.trim()};
 }
-function rows() { return [...receipts].sort((a, b) => (a.date || '').localeCompare(b.date || '')); }
+function rows() { return [...receipts, ...perDiemRows()].sort((a, b) => (a.date || '').localeCompare(b.date || '') || !!a.perDiem - !!b.perDiem); }
 function ready() {
-  if (!receipts.length) { alert('Add at least one receipt first.'); return false; }
+  const pd = perDiemRows();
+  if (!receipts.length && !pd.length) { alert('Add at least one receipt first.'); return false; }
+  if (pd.length && !(num($('pdRate').value) > 0)) { alert('Enter the per diem daily rate (step 3), or untick the per diem days.'); return false; }
   if (receipts.some(r => r.status === 'waiting' || r.status === 'scanning')) { alert('Still reading receipts — please wait a moment.'); return false; }
   const bad = receipts.findIndex(r => !/^\d{4}-\d{2}-\d{2}$/.test(r.date) || r.amount === '' || !(num(r.amount) >= 0));
   if (bad >= 0) { alert(`Receipt ${bad + 1} needs a date and a total.`); return false; }
@@ -554,7 +683,7 @@ async function excelBlob() {
     const r = a[j], row = ws.getRow(10 + j);
     if (r) {
       const [y, m, d] = r.date.split('-').map(Number);
-      row.values = [r.name, r.type, new Date(Date.UTC(y, m - 1, d)), 'Yes', num(r.amount)];
+      row.values = [r.name, r.type, new Date(Date.UTC(y, m - 1, d)), r.perDiem ? 'N/A' : 'Yes', num(r.amount)];
       row.getCell(3).numFmt = 'mm/dd/yyyy';
       row.getCell(5).numFmt = '$#,##0.00';
     }
@@ -572,6 +701,7 @@ async function excelBlob() {
 async function pdfBlob() {
   await loadScript(LIB.jspdf);
   const {jsPDF} = window.jspdf, i = info(), a = rows(), total = a.reduce((s, r) => s + num(r.amount), 0);
+  const rec = a.filter(r => !r.perDiem);   // per diem has no receipt to attach
   const doc = new jsPDF({unit: 'pt', format: 'letter', orientation: 'portrait'});
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 36;
   let first = true;
@@ -596,7 +726,7 @@ async function pdfBlob() {
     header();
     a.forEach((r, j) => {
       if (y > H - 60) { doc.addPage('letter', 'portrait'); y = 50; header(); }
-      doc.text(String(j + 1), x[0], y);
+      doc.text(r.perDiem ? '–' : String(rec.indexOf(r) + 1), x[0], y);
       doc.text(doc.splitTextToSize(r.name || '', 240)[0] || '', x[1], y);
       doc.text(r.type, x[2], y); doc.text(pretty(r.date), x[3], y);
       doc.text(fmt(num(r.amount)), x[4], y, {align: 'right'});
@@ -607,12 +737,12 @@ async function pdfBlob() {
     doc.text('Total: ' + fmt(total), x[4], y + 10, {align: 'right'});
   }
 
-  a.forEach((r, j) => {
+  rec.forEach((r, j) => {
     const pages = r.pages.length ? r.pages : [null];
     pages.forEach((p, k) => {
       newPage();
       doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(20);
-      const label = `Receipt ${j + 1} of ${a.length}${pages.length > 1 ? ` (page ${k + 1}/${pages.length})` : ''}`;
+      const label = `Receipt ${j + 1} of ${rec.length}${pages.length > 1 ? ` (page ${k + 1}/${pages.length})` : ''}`;
       doc.text(label, M, 40);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
       doc.text(`${r.name || ''}  •  ${r.type}  •  ${pretty(r.date)}  •  ${fmt(num(r.amount))}`.slice(0, 110), M, 56);
@@ -623,6 +753,7 @@ async function pdfBlob() {
       doc.addImage(p.data, 'JPEG', M + (maxW - w) / 2, top, w, h);
     });
   });
+  if (first) { newPage(); doc.setFontSize(11); doc.text('No receipts — per diem only.', M, 50); }
   return doc.output('blob');
 }
 
@@ -706,8 +837,10 @@ function buildInvoice(i, a) {
   y += 62;
 
   label('NOTES / ADDITIONAL DETAILS', L, y);
+  const nPd = a.filter(r => r.perDiem).length, nRec = a.length - nPd;
   const note = `Reimbursable business expenses for ${i.client || 'client'} engagement (Match # ${i.match || '-'}), week ending ${pretty(i.week)}. ` +
-    `${a.length} itemized receipt${a.length === 1 ? '' : 's'} provided in the accompanying receipts PDF.`;
+    `${nRec} itemized receipt${nRec === 1 ? '' : 's'} provided in the accompanying receipts PDF.` +
+    (nPd ? ` Includes per diem for ${nPd} day${nPd === 1 ? '' : 's'} on site.` : '');
   doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...INK);
   doc.text(doc.splitTextToSize(note, R - L - 12), L + 2, y + 18);
   footer();
@@ -728,6 +861,7 @@ render();
 // expose the parser for testing
 window.__parseReceipt = parseReceipt;
 window.__fileInfo = fileInfo;
+window.__findStay = findStay;
 window.__buildInvoice = async (i, a) => { await loadScript(LIB.jspdf); return buildInvoice(i, a); };
 })();
 </script>
