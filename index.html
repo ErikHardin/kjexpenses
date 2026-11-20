@@ -41,7 +41,7 @@ button.tiny{font-size:12px;padding:6px 9px}
 .check{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;margin:10px 0 0;color:#33536f}
 .check input{width:auto}
 .stay{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;padding:8px 10px;border-radius:8px;background:#eef5ff}
-.pdrow{display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #edf1f5;font-size:14px}
+.pdrow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #edf1f5;font-size:14px}
 .pdrow input{width:auto}
 .pdrow.off{color:#9aa8b6;text-decoration:line-through}
 .pdadd{display:flex;gap:8px;align-items:center;margin-top:10px}
@@ -89,8 +89,7 @@ button.tiny{font-size:12px;padding:6px 9px}
   <section class="card">
     <h2><span class="step">3</span>Per diem</h2>
     <div class="info">
-      <div><label for="pdRate">Daily rate ($)</label><input id="pdRate" inputmode="decimal" placeholder="e.g. 79.00"></div>
-      <div><label for="pdPct">Check-in &amp; check-out days (%)</label><input id="pdPct" inputmode="numeric" value="100"></div>
+      <div><label for="pdRate">Daily rate ($)</label><input id="pdRate" inputmode="decimal" value="50.00"></div>
     </div>
     <p class="muted">Added automatically for every day of each hotel stay in the selected week, from check-in through check-out. Untick a day you weren’t on site, or add a day without a hotel.</p>
     <div id="pdList"></div>
@@ -135,7 +134,7 @@ let weekTouched = false;
 function saturday(s) { const d = new Date(s + 'T12:00:00'); d.setDate(d.getDate() + (6 - d.getDay())); return dateStr(d); }
 // Match # always starts as 2649040 (set in the HTML) and is never remembered between visits.
 try { localStorage.removeItem('kj-match'); } catch (e) {}
-const infoIds = ['employee', 'client', 'billTo', 'pdRate', 'pdPct'];
+const infoIds = ['employee', 'client', 'billTo', 'pdRate'];
 $('invDate').value = dateStr(new Date());
 infoIds.forEach(id => {
   try { const v = localStorage.getItem('kj-' + id); if (v) $(id).value = v; } catch (e) {}
@@ -558,32 +557,25 @@ function updateTotal() {
 /* ---------- per diem ---------- */
 let pdOff = new Set(), pdExtra = new Set();   // days she unticked / added by hand
 const weekStart = () => addDays($('week').value, -6);
-// every on-site day in the selected week: {date, travel, manual, on, amount}
+// every on-site day in the selected week (check-in through check-out, full rate): {date, manual, on, amount}
 function perDiemDays() {
-  const rate = num($('pdRate').value), pct = $('pdPct').value.trim() === '' ? 100 : num($('pdPct').value);
-  const flags = new Map(), flag = d => flags.get(d) || (flags.set(d, {start: 0, end: 0, mid: 0, manual: false}), flags.get(d));
+  const rate = num($('pdRate').value), stay = new Set();
   for (const r of receipts) {
     if (r.type !== 'Hotel' || !isDate(r.stayIn) || !isDate(r.stayOut) || r.stayOut < r.stayIn) continue;
     const n = daysBetween(r.stayIn, r.stayOut);
-    if (n > 31) continue;
-    for (let k = 0; k <= n; k++) { const f = flag(addDays(r.stayIn, k)); if (k === 0) f.start++; if (k === n) f.end++; if (k > 0 && k < n) f.mid++; }
+    if (n <= 31) for (let k = 0; k <= n; k++) stay.add(addDays(r.stayIn, k));
   }
-  for (const d of pdExtra) flag(d).manual = true;
   const lo = weekStart(), hi = $('week').value;
   let outside = 0;
   const days = [];
-  for (const [date, f] of [...flags].sort((a, b) => a[0].localeCompare(b[0]))) {
+  for (const date of [...new Set([...stay, ...pdExtra])].sort()) {
     if (date < lo || date > hi) { outside++; continue; }
-    // check-in or check-out day, unless it's also inside (or joins up with) another stay
-    const travel = !f.manual && !f.mid && !(f.start && f.end);
-    const amount = Number.isFinite(rate) ? Math.round(rate * (travel ? pct / 100 : 1) * 100) / 100 : NaN;
-    days.push({date, travel, manual: f.manual, on: !pdOff.has(date), amount});
+    days.push({date, manual: !stay.has(date), on: !pdOff.has(date), amount: Number.isFinite(rate) ? Math.round(rate * 100) / 100 : NaN});
   }
-  return {days, outside, rate, pct};
+  return {days, outside};
 }
 function perDiemRows() {
-  const {days, pct} = perDiemDays();
-  return days.filter(d => d.on).map(d => ({name: d.travel && pct !== 100 ? `Per Diem (travel day, ${pct}%)` : 'Per Diem', type: 'Per Diem',
+  return perDiemDays().days.filter(d => d.on).map(d => ({name: 'Per Diem', type: 'Per Diem',
     date: d.date, amount: Number.isFinite(d.amount) ? d.amount.toFixed(2) : '', pages: [], perDiem: true}));
 }
 const dayLabel = s => new Date(s + 'T12:00:00').toLocaleDateString('en-US', {weekday: 'short', month: '2-digit', day: '2-digit', year: 'numeric'});
@@ -593,14 +585,13 @@ function renderPerDiem() {
   $('pdList').innerHTML = (days.length ? days.map(d => `<div class="pdrow ${d.on ? '' : 'off'}">
       <input type="checkbox" data-pd="${d.date}" ${d.on ? 'checked' : ''} aria-label="Include ${d.date}">
       <span>${dayLabel(d.date)}</span>
-      <span class="pill ${d.travel ? 'warn' : ''}">${d.manual ? 'Added' : d.travel ? 'Travel day' : 'On site'}</span>
       <span style="display:flex;gap:8px;align-items:center"><b>${Number.isFinite(d.amount) ? fmt(d.amount) : '—'}</b>${d.manual ? `<button class="tiny danger" data-pdx="${d.date}">✕</button>` : ''}</span>
     </div>`).join('') : '<p class="note">No per diem days yet — they appear here once a hotel receipt with check-in/check-out dates is added.</p>')
     + (outside ? `<p class="note">${outside} day${outside === 1 ? '' : 's'} of a hotel stay fall outside the week ending ${pretty($('week').value)} and ${outside === 1 ? 'isn’t' : 'aren’t'} included.</p>` : '');
   $('pdList').querySelectorAll('[data-pd]').forEach(c => c.onchange = () => { c.checked ? pdOff.delete(c.dataset.pd) : pdOff.add(c.dataset.pd); renderPerDiem(); updateTotal(); });
   $('pdList').querySelectorAll('[data-pdx]').forEach(b => b.onclick = () => { pdExtra.delete(b.dataset.pdx); renderPerDiem(); updateTotal(); });
 }
-['pdRate', 'pdPct'].forEach(id => $(id).addEventListener('input', () => { renderPerDiem(); updateTotal(); }));
+['pdRate'].forEach(id => $(id).addEventListener('input', () => { renderPerDiem(); updateTotal(); }));
 $('pdAddBtn').onclick = () => {
   const d = $('pdNew').value;
   if (!isDate(d)) { alert('Pick a date first.'); return; }
@@ -627,7 +618,6 @@ function ready() {
   const pd = perDiemRows();
   if (!receipts.length && !pd.length) { alert('Add at least one receipt first.'); return false; }
   if (pd.length && !(num($('pdRate').value) > 0)) { alert('Enter the per diem daily rate (step 3), or untick the per diem days.'); return false; }
-  if (pd.length && !(num($('pdPct').value || 100) >= 0)) { alert('The check-in & check-out day % needs to be a number.'); return false; }
   if (receipts.some(r => r.status === 'waiting' || r.status === 'scanning')) { alert('Still reading receipts — please wait a moment.'); return false; }
   const bad = receipts.findIndex(r => !/^\d{4}-\d{2}-\d{2}$/.test(r.date) || r.amount === '' || !(num(r.amount) >= 0));
   if (bad >= 0) { alert(`Receipt ${bad + 1} needs a date and a total.`); return false; }
